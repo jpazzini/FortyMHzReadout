@@ -206,6 +206,12 @@ static void* readandwrite(void *arg)
       uint32_t TDC_CHANNEL             =  1 + (uint32_t)(((uint64_t *)data->buffer)[ith_word] >> 49 ) & 0x1FF;   // channel 0 -> 1
       uint32_t FPGA                    =      (uint32_t)(((uint64_t *)data->buffer)[ith_word] >> 58 ) & 0xF  ;
       uint32_t HEAD                    =      (uint32_t)(((uint64_t *)data->buffer)[ith_word] >> 62 ) & 0x3  ;
+
+      if (TDC_CHANNEL==137 || TDC_CHANNEL==138) 
+      {
+        TDC_MEAS += 1;
+      }
+
       if(verbosity>0) 
       {
         printf("FULL WORD            = %" PRIu64 "\n", ((uint64_t *)data->buffer)[ith_word]);

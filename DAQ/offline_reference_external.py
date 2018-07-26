@@ -59,7 +59,7 @@ zchamb    = 550.  # spacing betweeen chambers in mm
 tDrift    = 15.6  # drift time in bx
 vDrift    = xcell*0.5 / (tDrift*25.) # drift velocity in mm/ns 
 
-REFERENCESL = 2
+TSHIFT = -120. # in ns (where the uncorrected timebox starts on the time axis!)
 
 #############################################
 ### DEFINE BOKEH FIGURE (CANVAS EQUIVALENT)
@@ -385,79 +385,30 @@ dfhits['ANGLE'] = None
 dfhits['X_POS_LEFT'] = None
 dfhits['X_POS_RIGHT'] = None
 
-# loop on orbit for reference chamber (SL=REFERENCESL)
-for orbits in allhits[allhits['SL']==REFERENCESL].ORBIT_CNT.unique():
+# loop on orbit for external trigger
+for orbits in allhits[allhits['TDC_CHANNEL']==137].ORBIT_CNT.unique(): 
 
   # remove all hits not belonging to this orbit and chamber
-  df     = allhits[(allhits['SL']==REFERENCESL) & (allhits.ORBIT_CNT == orbits)]
+  df = allhits[ (allhits.ORBIT_CNT == orbits) & (allhits['TDC_CHANNEL']!=137) ]
 
-  # test meantimer conditions
-  tzeros = []
-  for permut in list(itertools.permutations(df.index,3)):
-    chantriplet = df.loc[list(permut)]['TDC_CHANNEL_NORM'].tolist()
-    timetriplet = df.loc[list(permut)]['TIME'].tolist()
-    timediffs   = [ abs(x-y) for x,y in itertools.combinations(timetriplet,2) ]
-    if VERBOSE > 1:
-      print 'found triplet'
-      print '   channels: ', chantriplet
-      print '   times   : ', timetriplet
-      print '   time difference between hits:', timediffs    
-    if any(itime > tDrift for itime in timediffs): continue
-    for patt in patterns:
-      if chantriplet in patterns[patt]:
-        if VERBOSE > 1:
-          print '--> matching pattern'
-          print '   ', df.loc[list(permut)][['TDC_CHANNEL_NORM','BX_COUNTER','TDC_MEAS']]
-          print '   ', patt, meantimereq(patt,timetriplet) 
-          print ''
-        tzeros.append(meantimereq(patt,timetriplet)[0])
-    pass
-  pass
+  df_trig = allhits[ (allhits.ORBIT_CNT == orbits) & (allhits['TDC_CHANNEL']==137) ]
 
-  # if more than 1 pattern is found, compare them
-  #   if all within 1bx               -> assign the mean of them to tzero
-  #   if any differ by more than 1bx  -> use min tzero
-  tzero = -9e9 
-  if len(tzeros)>0:
-    tzero = min(tzeros)
-    relativediffs = [ x-y for x,y in itertools.combinations(tzeros,2) ]
-    if all(abs(i) < 0.1 for i in relativediffs):
-      tzero = np.mean(tzeros)
+  BXTRIGGER = df_trig['TIME'].tolist()[0] 
 
-  # remove all orbits with no triplets in it 
-  if tzero<0: continue
+  df['TIME0']  = BXTRIGGER + TSHIFT/25.
+  df['TIMENS'] = ( df['TIME'] - df['TIME0'] ) * 25.
+  df['X_POS_LEFT']  = ((df['TDC_CHANNEL_NORM']-0.5).floordiv(4) + df['X_POSSHIFT'])*xcell + xcell/2 - df.TIMENS*vDrift
+  df['X_POS_RIGHT'] = ((df['TDC_CHANNEL_NORM']-0.5).floordiv(4) + df['X_POSSHIFT'])*xcell + xcell/2 + df.TIMENS*vDrift
 
-  print '============='
-  print tzero
-
-  # create large df with both reference and measeure chamber
-  df_all = allhits[(allhits.ORBIT_CNT == orbits) & ((allhits.TIME - tzero).abs()<20)]
-
-  df_all = df_all.assign(TIME0=tzero)
-
-  # correct hits time for tzero and convert it to nx (assuming 1 BX = 25 ns)
-  df_all['TIMENS']=(df_all['TIME']-df_all['TIME0'])*25
-  # assign hits position (left/right wrt wire)
-  df_all['X_POS_LEFT']  = ((df_all['TDC_CHANNEL_NORM']-0.5).floordiv(4) + df_all['X_POSSHIFT'])*xcell + xcell/2 - df_all.TIMENS*vDrift
-  df_all['X_POS_RIGHT'] = ((df_all['TDC_CHANNEL_NORM']-0.5).floordiv(4) + df_all['X_POSSHIFT'])*xcell + xcell/2 + df_all.TIMENS*vDrift
-
-  # add all back to the dataframe of selected hits
-  dfhits = dfhits.append(df_all,ignore_index=True)
-
-  dfhits_out = dfhits[['SL','LAYER','WIRE_NUM','TDC_CHANNEL_NORM','TIMENS','TIME0','X_POS_LEFT','X_POS_RIGHT','Z_POS']]
-
-  dfhits_out.to_csv('out_df_test.csv')
+  dfhits = dfhits.append(df,ignore_index=True)
 
 pass
 
 
 
-
-
-
 for SL_ in range(4):
 
-  df_ = dfhits[dfhits_out.SL==SL_]
+  df_ = dfhits[dfhits.SL==SL_]
 
   if df_['HEAD'].count() == 0:
       print 'INFO --- No triplet found in this range'
