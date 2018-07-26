@@ -80,6 +80,7 @@ for lay in [1,2,3,4]:
 p_timebox_SL = {} # timebox
 p_time0_SL = {} # t0
 p_tdcchan_SL = {} # channel
+p_tdcrate_SL = {} # channel
 p_tdcmeas_SL = {} # tdc count
 p_time0diff_SL = {} # difference between t0s 
 p_time0mult_SL = {} # t0 multiplicity
@@ -114,6 +115,14 @@ for SL in range(0,4):
     plot_height=300,
     title="channel - SL%d" % SL,
     y_axis_label="hits",
+    x_axis_label="channel",
+    )
+
+  p_tdcrate_SL[SL] = figure(
+    plot_width=450,
+    plot_height=300,
+    title="rate per channel - SL%d" % SL,
+    y_axis_label="hits/s",
     x_axis_label="channel",
     )
 
@@ -304,10 +313,16 @@ def thisfunction(SL_, allhits_):
   pass
  
   # now plot
+
+  deltat = float(allhits_SL['ORBIT_CNT'].max() - allhits_SL['ORBIT_CNT'].min()) * 25. * 3564. 
+
+  print 'Delta-t =', deltat, 'ns'
   
   histbxns,    edgesbxns    = np.histogram(dfhits.TIMENS,           density=False, bins=100, range=(-200,800))
   histt0ns,    edgest0ns    = np.histogram(dfhits.TIME0,            density=False, bins=90,  range=(0,3600))
   histchan,    edgeschan    = np.histogram(allhits_SL.TDC_CHANNEL_NORM, density=False, bins=range(0,nchannels+2))
+  histrate = [x / (deltat * 10**-9) for x in histchan]
+  edgesrate = edgeschan 
   histtdc,     edgestdc     = np.histogram(allhits_SL.TDC_MEAS,         density=False, bins=range(0,32))
   histt0diff,  edgest0diff  = np.histogram(tzerodiff,               density=False, bins=150, range=(-5,5))
   histt0mult,  edgest0mult  = np.histogram(tzeromult,               density=False, bins=30,  range=(0,30))
@@ -342,6 +357,11 @@ def thisfunction(SL_, allhits_):
               bottom=0,
               left=edgeschan[:-1],
               right=edgeschan[1:])
+
+  p_tdcrate_SL[SL_].quad(top=histrate,
+              bottom=0,
+              left=edgesrate[:-1],
+              right=edgesrate[1:])
 
   p_tdcmeas_SL[SL_].quad(top=histtdc,
               bottom=0,
@@ -645,6 +665,7 @@ output_file("offline_plots.html", mode="inline")
 
 ## SHOW OUTPUT IN BROWSER
 show(gridplot([p_tdcchan_SL[0], p_tdcchan_SL[1], p_tdcchan_SL[2], p_tdcchan_SL[3]],               # channel multiplicity per SL
+              [p_tdcrate_SL[0], p_tdcrate_SL[1], p_tdcrate_SL[2], p_tdcrate_SL[3]],               # hit rate per channel per SL in s
               [p_tdcmeas_SL[0], p_tdcmeas_SL[1], p_tdcmeas_SL[2], p_tdcmeas_SL[3]],               # TDC meas multiplicity per SL
               [p_occ_SL[0], p_occ_SL[1], p_occ_SL[2], p_occ_SL[3]],                               # occupancy per SL
               [p_timebox_SL[0], p_timebox_SL[1], p_timebox_SL[2], p_timebox_SL[3]],               # timebox per SL
