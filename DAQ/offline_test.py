@@ -52,7 +52,7 @@ import os
 ###             key is the identifier of the univoque equation to be used given the pattern of hits in the triplet
 ### patterns  =  dictionary of patterns (list of triples of hits time in bx relative to orbit: BX + TDC/30), arranged by key being a string identifier used to select the proper mean-timing eq to be solved 
 VERBOSE   = 1     # set verbosity level
-nchannels = 80    # numbers of channels per chamber (one FPGA maps 2 chanbers --> 128 channels per FPGA --> 2SLs)
+nchannels = 64    # numbers of channels per chamber (one FPGA maps 2 chanbers --> 128 channels per FPGA --> 2SLs)
 xcell     = 42.   # cell width in mm
 zcell     = 13.   # cell height in mm
 zchamb    = 550.  # spacing betweeen chambers in mm
@@ -676,7 +676,7 @@ if VERBOSE:
 jobs = []  
 
 #for SL in range(4):
-for SL in range(4):
+for SL in range(1):
   p = threading.Thread(target=thisfunction, args=(SL,allhits,))
   jobs.append(p)
   p.start()
