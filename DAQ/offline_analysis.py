@@ -236,7 +236,7 @@ for SL in range(0,4):
 
 #############################################
 ### ANALYSIS
-def thisfunction(SL_, allhits_):
+def thisfunction(SL_, allhits_, exclude_):
   allhits_SL = allhits_[allhits_['SL']==SL_]
   dfhits = pd.DataFrame(columns=allhits_SL.dtypes.index)
   dfhits['TIME0'] = None
@@ -250,128 +250,123 @@ def thisfunction(SL_, allhits_):
   hitperorbit = []
   hitperorbitclean = []
 
-  # loop on orbit
-  for orbits in allhits_SL.ORBIT_CNT.unique():
+  if not exclude_:
 
-    # remove all hits not belonging to this orbit
-    df = allhits_SL[allhits_SL.ORBIT_CNT == orbits]
+    # loop on orbit
+    for orbits in allhits_SL.ORBIT_CNT.unique():
 
-    if VERBOSE > 1:
-      print 'analyzing orbit', orbits
-      print '# hits =',df['HEAD'].count()
+      # remove all hits not belonging to this orbit
+      df = allhits_SL[allhits_SL.ORBIT_CNT == orbits]
 
-    hitperorbit.append(df.count())
-
-    # retain orbits with only 3 or more hits
-    #if len(df.index)!=4: continue ### bkp for quadruplets
-    if len(df.index)<3: continue
-
-    hitperorbitclean.append(df.count())
-    
-    tzeros = []
-    angles = []
-    for permut in list(itertools.permutations(df.index,3)):
-      chantriplet = df.loc[list(permut)]['TDC_CHANNEL_NORM'].tolist()
-      timetriplet = df.loc[list(permut)]['TIME'].tolist()
-      timediffs   = [ abs(x-y) for x,y in itertools.combinations(timetriplet,2) ]
       if VERBOSE > 1:
-        print 'found triplet'
-        print '   channels: ', chantriplet
-        print '   times   : ', timetriplet
-        print '   time difference between hits:', timediffs    
-      if any(itime > tDrift for itime in timediffs): continue
-      for patt in patterns:
-        if chantriplet in patterns[patt]:
-          if VERBOSE > 1:
-            print '--> matching pattern'
-            print '   ', df.loc[list(permut)][['TDC_CHANNEL_NORM','BX_COUNTER','TDC_MEAS']]
-            print '   ', patt, meantimereq(patt,timetriplet) 
-            print ''
-          tzeros.append(meantimereq(patt,timetriplet)[0])
-          angles.append(meantimereq(patt,timetriplet)[1])
+        print 'analyzing orbit', orbits
+        print '# hits =',df['HEAD'].count()
+
+      hitperorbit.append(df.count())
+
+      # retain orbits with only 3 or more hits
+      #if len(df.index)!=4: continue ### bkp for quadruplets
+      if len(df.index)<3: continue
+
+      hitperorbitclean.append(df.count())
+      
+      tzeros = []
+      angles = []
+      for permut in list(itertools.permutations(df.index,3)):
+        chantriplet = df.loc[list(permut)]['TDC_CHANNEL_NORM'].tolist()
+        timetriplet = df.loc[list(permut)]['TIME'].tolist()
+        timediffs   = [ abs(x-y) for x,y in itertools.combinations(timetriplet,2) ]
+        if VERBOSE > 1:
+          print 'found triplet'
+          print '   channels: ', chantriplet
+          print '   times   : ', timetriplet
+          print '   time difference between hits:', timediffs    
+        if any(itime > tDrift for itime in timediffs): continue
+        for patt in patterns:
+          if chantriplet in patterns[patt]:
+            if VERBOSE > 1:
+              print '--> matching pattern'
+              print '   ', df.loc[list(permut)][['TDC_CHANNEL_NORM','BX_COUNTER','TDC_MEAS']]
+              print '   ', patt, meantimereq(patt,timetriplet) 
+              print ''
+            tzeros.append(meantimereq(patt,timetriplet)[0])
+            angles.append(meantimereq(patt,timetriplet)[1])
+        pass
       pass
+
+      tzeromult.append(len(tzeros))
+
+      # if more than 1 pattern is found, compare them
+      #   if all within 1bx               -> assign the mean of them to tzero
+      #   if any differ by more than 1bx  -> use min tzero
+      tzero = -9e9 
+      angle = -9e9 
+      if len(tzeros)>0:
+        tzero = min(tzeros)
+        relativediffs = [ x-y for x,y in itertools.combinations(tzeros,2) ]
+        tzerodiff += relativediffs
+        if all(abs(i) < 0.1 for i in relativediffs):
+          tzero = np.mean(tzeros)
+          angle = np.mean(angles)
+
+      # remove all orbits with no triplets in it 
+      if tzero<0: continue
+
+      # assign tzero
+      df = df.assign(TIME0=tzero)
+
+      # correct hits time for tzero and convert it to nx (assuming 1 BX = 25 ns)
+      df['TIMENS']=(df['TIME']-df['TIME0'])*25
+      df['ANGLE']=angle
+      # assign hits position (left/right wrt wire)
+      df['X_POS_LEFT']  = ((df['TDC_CHANNEL_NORM']-0.5).floordiv(4) + df['X_POSSHIFT'])*xcell + xcell/2 - df.TIMENS*vDrift
+      df['X_POS_RIGHT'] = ((df['TDC_CHANNEL_NORM']-0.5).floordiv(4) + df['X_POSSHIFT'])*xcell + xcell/2 + df.TIMENS*vDrift
+
+      # add all back to the dataframe of selected hits
+      dfhits = dfhits.append(df,ignore_index=True)
+
+      dfhits_out = dfhits[['SL','LAYER','WIRE_NUM','TDC_CHANNEL_NORM','TIMENS','TIME0','X_POS_LEFT','X_POS_RIGHT','Z_POS']]
+
+      dfhits_out.to_csv('out_df_%d.csv'%SL_)
+
     pass
-
-    tzeromult.append(len(tzeros))
-
-    # if more than 1 pattern is found, compare them
-    #   if all within 1bx               -> assign the mean of them to tzero
-    #   if any differ by more than 1bx  -> use min tzero
-    tzero = -9e9 
-    angle = -9e9 
-    if len(tzeros)>0:
-      tzero = min(tzeros)
-      relativediffs = [ x-y for x,y in itertools.combinations(tzeros,2) ]
-      tzerodiff += relativediffs
-      if all(abs(i) < 0.1 for i in relativediffs):
-        tzero = np.mean(tzeros)
-        angle = np.mean(angles)
-
-    # remove all orbits with no triplets in it 
-    if tzero<0: continue
-
-    # assign tzero
-    df = df.assign(TIME0=tzero)
-
-    # correct hits time for tzero and convert it to nx (assuming 1 BX = 25 ns)
-    df['TIMENS']=(df['TIME']-df['TIME0'])*25
-    df['ANGLE']=angle
-    # assign hits position (left/right wrt wire)
-    df['X_POS_LEFT']  = ((df['TDC_CHANNEL_NORM']-0.5).floordiv(4) + df['X_POSSHIFT'])*xcell + xcell/2 - df.TIMENS*vDrift
-    df['X_POS_RIGHT'] = ((df['TDC_CHANNEL_NORM']-0.5).floordiv(4) + df['X_POSSHIFT'])*xcell + xcell/2 + df.TIMENS*vDrift
-
-    # add all back to the dataframe of selected hits
-    dfhits = dfhits.append(df,ignore_index=True)
-
-    dfhits_out = dfhits[['SL','LAYER','WIRE_NUM','TDC_CHANNEL_NORM','TIMENS','TIME0','X_POS_LEFT','X_POS_RIGHT','Z_POS']]
-
-    dfhits_out.to_csv('out_df_%d.csv'%SL_)
-
   pass
- 
+
   if dfhits['HEAD'].count() == 0:
       print 'INFO --- No triplet found in this range'
       dfhits.fillna(method='ffill')
  
   # now plot
-
-  deltat = float(allhits_SL['ORBIT_CNT'].max() - allhits_SL['ORBIT_CNT'].min()) * 25. * 3564. 
-
-  print 'Delta-t =', deltat, 'ns'
+  histchan,    edgeschan    = np.histogram(allhits_SL.TDC_CHANNEL_NORM, density=False, bins=range(0,nchannels+2))  
   
-  histbxns,    edgesbxns    = np.histogram(dfhits.TIMENS,           density=False, bins=100, range=(-200,800))
-  histt0ns,    edgest0ns    = np.histogram(dfhits.TIME0,            density=False, bins=90,  range=(0,3600))
-  histchan,    edgeschan    = np.histogram(allhits_SL.TDC_CHANNEL_NORM, density=False, bins=range(0,nchannels+2))
+  deltat = float(allhits_SL['ORBIT_CNT'].max() - allhits_SL['ORBIT_CNT'].min()) * 25. * 3564. 
+  if VERBOSE > 1:
+   print 'Delta-t (SL {}) = {} ns'.format(SL_, deltat)
+  if deltat!=deltat:
+    deltat = 10**9
   histrate = [x / (deltat * 10**-9) for x in histchan]
   edgesrate = edgeschan 
-  
+
   occchan = [map(c)[0] for c in range(1, nchannels+1)]
   occlay  = [map(c)[1] for c in range(1, nchannels+1)]
   occ     = []
+  somecolors = []
+  maxcount = float(max(histchan))
   for c in range(1, nchannels+1):
-      occ.append(allhits_SL['TDC_CHANNEL_NORM'][allhits_SL['TDC_CHANNEL_NORM']==c].count()/float(max(histchan)))
-  
-  somecolors = ["#%02x%02x%02x" % (int(255*(1-c)), int(255*(1-c)), int(255*(1-c))) for c in occ]  
+      cval = allhits_SL['TDC_CHANNEL_NORM'][allhits_SL['TDC_CHANNEL_NORM']==c].count()/maxcount if maxcount>0 else allhits_SL['TDC_CHANNEL_NORM'][allhits_SL['TDC_CHANNEL_NORM']==c].count()
+      occ.append(cval)
+      somecolors.append("#%02x%02x%02x" % (int(255*(1-cval)), int(255*(1-cval)), int(255*(1-cval))) if cval>0 else '#ffffff')
   
   histtdc,     edgestdc     = np.histogram(allhits_SL.TDC_MEAS,         density=False, bins=range(0,32))
+
+  histbxns,    edgesbxns    = np.histogram(dfhits.TIMENS,           density=False, bins=100, range=(-200,800))
+  histt0ns,    edgest0ns    = np.histogram(dfhits.TIME0,            density=False, bins=90,  range=(0,3600))
   histt0diff,  edgest0diff  = np.histogram(tzerodiff,               density=False, bins=150, range=(-5,5))
   histt0mult,  edgest0mult  = np.histogram(tzeromult,               density=False, bins=30,  range=(0,30))
   histhpo,     edgeshpo     = np.histogram(hitperorbit,             density=False, bins=30,  range=(0,30))
   histhpoc,    edgeshpoc    = np.histogram(hitperorbitclean,        density=False, bins=10,  range=(0,10))
   histposx,    edgesposx    = np.histogram(dfhits.TIMENS*vDrift,    density=False, bins=140, range=(-5,30))
   histangl,    edgesangl    = np.histogram(dfhits.ANGLE,            density=False, bins=100, range=(-0.1,0.1))
-  '''
-  histbxns,    edgesbxns    = np.histogram(allhits_SL.TDC_CHANNEL_NORM,           density=False, bins=100, range=(-200,800))
-  histt0ns,    edgest0ns    = np.histogram(allhits_SL.TDC_CHANNEL_NORM,            density=False, bins=90,  range=(0,3600))
-  histchan,    edgeschan    = np.histogram(allhits_SL.TDC_CHANNEL_NORM, density=False, bins=range(0,nchannels+2))
-  histtdc,     edgestdc     = np.histogram(allhits_SL.TDC_MEAS,         density=False, bins=range(0,32))
-  histt0diff,  edgest0diff  = np.histogram(tzerodiff,               density=False, bins=150, range=(-5,5))
-  histt0mult,  edgest0mult  = np.histogram(tzeromult,               density=False, bins=30,  range=(0,30))
-  histhpo,     edgeshpo     = np.histogram(hitperorbit,             density=False, bins=30,  range=(0,30))
-  histhpoc,    edgeshpoc    = np.histogram(hitperorbitclean,        density=False, bins=10,  range=(0,10))
-  histposx,    edgesposx    = np.histogram(allhits_SL.TDC_CHANNEL_NORM,    density=False, bins=140, range=(-5,30))
-  histangl,    edgesangl    = np.histogram(allhits_SL.TDC_CHANNEL_NORM,            density=False, bins=100, range=(-0.1,0.1))
-  '''
 
   p_timebox_SL[SL_].quad(top=histbxns,
               bottom=0,
@@ -471,9 +466,10 @@ def thisfunction(SL_, allhits_):
   colors = ["red", "green", "yellow"]
   for iorbit in dfhits.ORBIT_CNT.unique()[-3:]:
     q = dfhits[(dfhits['ORBIT_CNT'] == iorbit)]
-    p_occ_SL[SL_].scatter(x=q.TDC_CHANNEL_NORM+q.X_CHSHIFT,
-              y=q.LAYER,
-              # alpha=0.1,
+    occchan = [map(c)[0] for c in q.TDC_CHANNEL_NORM.tolist()]
+    occlay  = [map(c)[1] for c in q.TDC_CHANNEL_NORM.tolist()]
+    p_occ_SL[SL_].scatter(x=occchan,
+              y=occlay,
               marker='square',
               size=12,
               line_color=colors[0],
@@ -604,6 +600,7 @@ parser = argparse.ArgumentParser(description='Offline analysis of unpacked data.
 parser.add_argument('-i', '--input',  help='The unpacked input file to analyze')
 parser.add_argument('-n', '--number', action='store', default=10000,  dest='number', type=int, help='Number of hits to analyze')
 parser.add_argument('-s', '--skip',   action='store', default=131073, dest='skip',   type=int, help='Number of hits to skip at the top of the file')
+parser.add_argument('-x', '--exclude',action='store_true', dest='exclude', help='Exclude meantimer')
 args = parser.parse_args()
 if not os.path.exists(os.path.expandvars(args.input)):
     print '--- ERROR ---'
@@ -650,8 +647,6 @@ allhits['TIME'] = allhits['BX_COUNTER'] + allhits['TDC_MEAS']/30.
 allhits['TDC_CHANNEL_NORM']  = allhits['TDC_CHANNEL']-nchannels*(allhits['SL']%2)
 allhits['WIRE_NUM']  = (allhits['TDC_CHANNEL_NORM']-1).floordiv(4) + 1
 
-###print allhits[(allhits['SL']==3) & (allhits['ORBIT_CNT']>400000000)]
-
 #############################################
 ### DATA HANDLING 
 
@@ -675,9 +670,8 @@ if VERBOSE:
   
 jobs = []  
 
-#for SL in range(4):
 for SL in range(4):
-  p = threading.Thread(target=thisfunction, args=(SL,allhits,))
+  p = threading.Thread(target=thisfunction, args=(SL,allhits,args.exclude,))
   jobs.append(p)
   p.start()
 
