@@ -62,6 +62,17 @@ vDrift    = xcell*0.5 / (tDrift*25.) # drift velocity in mm/ns
 #############################################
 ### DEFINE BOKEH FIGURE (CANVAS EQUIVALENT)
 
+def map(chan):
+  mod = chan%4
+  if mod == 1:
+    return chan, 1
+  elif mod == 2:
+    return chan, 3
+  elif mod == 3:
+    return chan+0.5, 2
+  else: # mod == 0:
+    return chan+0.5, 4
+  
 # cell grid - used for plotting
 grid_b = []
 grid_t = []
@@ -228,6 +239,12 @@ for SL in range(0,4):
 def thisfunction(SL_, allhits_):
   allhits_SL = allhits_[allhits_['SL']==SL_]
   dfhits = pd.DataFrame(columns=allhits_SL.dtypes.index)
+  dfhits['TIME0'] = None
+  dfhits['TIMENS'] = None
+  dfhits['ANGLE'] = None
+  dfhits['X_POS_LEFT'] = None
+  dfhits['X_POS_RIGHT'] = None
+
   tzerodiff = []
   tzeromult = []
   hitperorbit = []
@@ -312,6 +329,10 @@ def thisfunction(SL_, allhits_):
 
   pass
  
+  if dfhits['HEAD'].count() == 0:
+      print 'INFO --- No triplet found in this range'
+      dfhits.fillna(method='ffill')
+ 
   # now plot
 
   deltat = float(allhits_SL['ORBIT_CNT'].max() - allhits_SL['ORBIT_CNT'].min()) * 25. * 3564. 
@@ -323,6 +344,15 @@ def thisfunction(SL_, allhits_):
   histchan,    edgeschan    = np.histogram(allhits_SL.TDC_CHANNEL_NORM, density=False, bins=range(0,nchannels+2))
   histrate = [x / (deltat * 10**-9) for x in histchan]
   edgesrate = edgeschan 
+  
+  occchan = [map(c)[0] for c in range(0, nchannels+2)]
+  occlay  = [map(c)[1] for c in range(0, nchannels+2)]
+  occ     = []
+  for c in range(0, nchannels+2):
+      occ.append(allhits_SL['TDC_CHANNEL_NORM'][allhits_SL['TDC_CHANNEL_NORM']==c].count()/float(max(histchan)))
+  
+  somecolors = ["#%02x%02x%02x" % (int(255*(1-c)), int(255*(1-c)), int(255*(1-c))) for c in occ]  
+  
   histtdc,     edgestdc     = np.histogram(allhits_SL.TDC_MEAS,         density=False, bins=range(0,32))
   histt0diff,  edgest0diff  = np.histogram(tzerodiff,               density=False, bins=150, range=(-5,5))
   histt0mult,  edgest0mult  = np.histogram(tzeromult,               density=False, bins=30,  range=(0,30))
@@ -409,13 +439,13 @@ def thisfunction(SL_, allhits_):
               bottom=0,
               left=edgesangl[:-1],
               right=edgesangl[1:])
-
-  p_occ_SL[SL_].scatter(x=allhits_SL.TDC_CHANNEL_NORM+allhits_SL.X_CHSHIFT,
-            y=allhits_SL.LAYER,
+  
+  p_occ_SL[SL_].scatter(x=occchan,
+            y=occlay,
+            fill_color=somecolors,
             marker='square',
             size=12,
-            line_color='navy',
-            fill_color='navy',
+            line_color=somecolors,
            )
 
   p_pos_SL[SL_].quad(top=grid_t, 
