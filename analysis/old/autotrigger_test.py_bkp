@@ -1,0 +1,191 @@
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
+import time
+import json
+import itertools
+
+from threading import Thread
+from kafka import KafkaConsumer
+
+import numpy as np
+import pandas as pd
+
+from bokeh.io import curdoc, reset_output
+from bokeh.layouts import row, gridplot
+from bokeh.client import push_session
+from bokeh.document import Document
+from bokeh.models import ColumnDataSource
+from bokeh.plotting import figure
+
+#from packages.patterns import PATTERNS, PATTERN_NAMES, ACCEPTANCE_CHANNELS, MEAN_TZERO_DIFF, meantimereq, mean_tzero, tzero_clusters
+from packages.config import NCHANNELS, XCELL, ZCELL, TDRIFT, VDRIFT, CHANNELS_TRIGGER, CHANNEL_TRIGGER, EVENT_NR_CHANNELS
+from packages.config import EVENT_TIME_GAP, TIME_OFFSET, TIME_OFFSET_SL, TIME_WINDOW, DURATION, TRIGGER_TIME_ARRAY
+from packages.config import NHITS_SL, MEANTIMER_ANGLES, MEANTIMER_CLUSTER_SIZE, MEANTIMER_SL_MULT_MIN
+
+# cell grid - used for plotting
+grid_b = []
+grid_t = []
+grid_l = []
+grid_r = []
+for lay in [1,2,3,4]:
+    for cell in range(1,NCHANNELS/4+1):
+        grid_b.append( 4*ZCELL - lay * ZCELL )
+        grid_t.append( grid_b[-1] + ZCELL )
+        grid_l.append( (cell-1) * XCELL)
+        grid_r.append( grid_l[-1] + XCELL )
+        if lay%2 == 0:
+            grid_l[-1]  += XCELL/2.
+            grid_r[-1] += XCELL/2.
+
+class Test(Thread):
+    def __init__(self, data1, data2, data3, consumer):
+        super(Test, self).__init__()
+        self.data1 = data1
+        self.data2 = data2
+        self.data3 = data3
+        self.cds1 = ColumnDataSource(data=data1)
+        self.cds2 = ColumnDataSource(data=data2)
+        self.cds3 = ColumnDataSource(data=data3)
+        self.p_timebox = figure(
+		  plot_width=600,
+                  plot_height=400,
+                  title="Timebox",
+                  x_axis_label="Time [ns]",
+                  y_axis_label="Hits")
+        self.p_timebox.quad(
+            top='timens_hist',
+            bottom=0,
+            left='timens_ledge',
+            right='timens_redge',
+            source=self.cds1)       
+        self.p_posx = figure(
+		  plot_width=600,
+                  plot_height=400,
+                  title="Hit position within cell",
+                  x_axis_label="Distance from wire [mm]",
+                  y_axis_label="Hits")
+        self.p_posx.quad(
+            top='posx_hist',
+            bottom=0,
+            left='posx_ledge',
+            right='posx_redge',   
+            source=self.cds2)
+
+        self.p_pos = figure(
+            plot_width=1800,
+            plot_height=120,
+            y_range=[0,60],
+            x_range=[-XCELL/2,XCELL*(NCHANNELS/4+1)],
+            title="Hit position",
+            y_axis_label="y (mm)",
+            x_axis_label="x (mm)")
+        self.p_pos.quad(
+            top=grid_t, 
+            bottom=grid_b, 
+            left=grid_l,
+            right=grid_r, 
+            fill_color='white',
+            line_color='black')
+        self.p_pos.scatter(
+            x='xpos_r',
+            y='zpos',
+            marker='square',
+            size=2,
+	    source=self.cds3)
+        self.p_pos.scatter(
+            x='xpos_l',
+            y='zpos',
+            marker='square',
+            size=2,
+	    source=self.cds3)
+
+        self.consumer = consumer 
+
+    def run(self):
+        for message in self.consumer:
+            allhits = pd.DataFrame(message.value)
+    	    conditions  = [
+        	(allhits['TDC_CHANNEL'] % 4 == 1 ),
+	        (allhits['TDC_CHANNEL'] % 4 == 2 ),
+        	(allhits['TDC_CHANNEL'] % 4 == 3 ),
+	        (allhits['TDC_CHANNEL'] % 4 == 0 ),
+	    ]
+	    conditions_SL = [
+	        ((allhits['FPGA'] == 0) & (allhits['TDC_CHANNEL'] <= NCHANNELS )),
+	        ((allhits['FPGA'] == 0) & (allhits['TDC_CHANNEL'] > NCHANNELS ) & (allhits['TDC_CHANNEL'] <= 2*NCHANNELS )),
+	        ((allhits['FPGA'] == 1) & (allhits['TDC_CHANNEL'] <= NCHANNELS )),
+	        ((allhits['FPGA'] == 1) & (allhits['TDC_CHANNEL'] > NCHANNELS ) & (allhits['TDC_CHANNEL'] <= 2*NCHANNELS )),
+	    ]
+    	    layer_z     = [  1,            3,            2,            4,         ]
+	    chanshift_x = [  0,            -1,           0,            -1,        ]
+	    pos_z       = [  ZCELL*3.5,    ZCELL*1.5,    ZCELL*2.5,    ZCELL*0.5, ]
+	    posshift_x  = [  0,            0,            0.5,          0.5,       ]
+
+	    # Adding columns
+	    allhits['LAYER']      	= np.select(conditions, layer_z,      default=0).astype(np.uint8)
+	    allhits['X_CHSHIFT']  	= np.select(conditions, chanshift_x,  default=0).astype(np.int8)
+	    allhits['X_POSSHIFT'] 	= np.select(conditions, posshift_x,   default=0).astype(np.float16)
+	    allhits['Z_POS']      	= np.select(conditions, pos_z,        default=0).astype(np.float16)
+	    allhits['SL'] 	  	= np.select(conditions_SL, [0, 1, 2, 3], default=-1).astype(np.int8)
+            allhits['TDC_CHANNEL_NORM'] = (allhits['TDC_CHANNEL'] - NCHANNELS * (allhits['SL']%2)).astype(np.uint8)
+            allhits['TIME0'] 		= -1
+            allhits['TIME_ABS'] 	= (allhits['ORBIT_CNT'].astype(np.float64)*DURATION['orbit'] +
+                                   	   allhits['BX_COUNTER'].astype(np.float64)*DURATION['bx']   +
+	                                   allhits['TDC_MEANS'].astype(np.float64)*DURATION['tdc']).astype(np.float64)
+
+	    # group events by checking on orbit counter
+            events = allhits.groupby('ORBIT_CNT')
+	    for event, df in events:
+                timezero = df.loc[df['TDC_CHANNEL']==139,'TIME_ABS'].values[0]
+		allhits.loc[allhits['ORBIT_CNT']==event,'TIME0'] = timezero
+
+	    # correct hits time by tzero
+	    allhits['TIMENS'] 	   = -allhits['TIME_ABS'] +allhits['TIME0']    
+	    allhits['X_POS_LEFT']  = ((allhits['TDC_CHANNEL_NORM']-0.5).floordiv(4) + allhits['X_POSSHIFT'])*XCELL + XCELL/2 - np.maximum(allhits['TIMENS'], 0)*VDRIFT
+	    allhits['X_POS_RIGHT'] = ((allhits['TDC_CHANNEL_NORM']-0.5).floordiv(4) + allhits['X_POSSHIFT'])*XCELL + XCELL/2 + np.maximum(allhits['TIMENS'], 0)*VDRIFT
+
+            # drop all trigger hits 
+	    allhits = allhits.loc[(allhits['TDC_CHANNEL']!=139)]
+
+            # push data 
+            timens_h, timens_e = np.histogram(allhits.TIMENS, density=False, bins=100, range=(-1000,1000))
+            self.data1['timens_hist'] = timens_h
+            self.data1['timens_ledge'] = timens_e[:-1]
+            self.data1['timens_redge'] = timens_e[1:]
+            self.cds1.data.update(**self.data1)
+
+            posx_h, posx_e = np.histogram(allhits.TIMENS*VDRIFT, density=False, bins=140, range=(-5,30))
+            self.data2['posx_hist'] = posx_h   
+            self.data2['posx_ledge'] = posx_e[:-1]
+            self.data2['posx_redge'] = posx_e[1:]
+            self.cds2.data.update(**self.data2)
+
+	    self.data3['xpos_r'] = allhits['X_POS_RIGHT'].tolist()
+            self.data3['xpos_l'] = allhits['X_POS_LEFT'].tolist()
+            self.data3['zpos'] = allhits['Z_POS'].tolist()
+            self.cds3.data.update(**self.data3)
+
+	    
+data1 = dict(timens_hist=[], timens_ledge=[], timens_redge=[])
+data2 = dict(posx_hist=[], posx_ledge=[], posx_redge=[])
+data3 = dict(xpos_r=[], xpos_l=[], zpos=[])
+
+consumer = KafkaConsumer(bootstrap_servers='10.64.22.40:9092,10.64.22.41:9092,10.64.22.42:9092',
+                       auto_offset_reset='latest',
+                       enable_auto_commit=False,
+                       value_deserializer=lambda m: json.loads(m.decode('ascii')))
+
+consumer.subscribe(['plot'])
+
+test = Test(data1=data1, data2=data2, data3=data3, consumer=consumer)
+
+doc = Document()
+doc.add_root(gridplot([[test.p_timebox, test.p_posx],[test.p_pos]]))
+session = push_session(document=doc)
+session.show()
+
+test.start()
+session.loop_until_closed()
+
+
+
