@@ -38,6 +38,40 @@
 #define UNPACKED_OUTPUT_NAME_DEFAULT "output_unpacked.txt"
 #define EXCLUDE_WRITEOUT_DEFAULT (0)
 
+
+// Hit masks
+const uint64_t hmaskTDC_MEAS = 0x1F;
+const uint64_t hmaskBX_COUNTER = 0xFFF;
+const uint64_t hmaskORBIT_CNT = 0xFFFFFFFF;
+const uint64_t hmaskTDC_CHANNEL = 0x1FF;
+const uint64_t hmaskFPGA = 0xF;
+const uint64_t hmaskHEAD = 0x3;
+
+const uint64_t hfirstTDC_MEAS   = 0;
+const uint64_t hfirstBX_COUNTER   = 5;
+const uint64_t hfirstORBIT_CNT   = 17;
+const uint64_t hfirstTDC_CHANNEL   = 49;
+const uint64_t hfirstFPGA   = 58;
+const uint64_t hfirstHEAD   = 62;
+
+// Trigger masks
+const uint64_t tmaskQUAL    = 0x0000000000000001;
+const uint64_t tmaskBX      = 0x0000000000001FFE;
+const uint64_t tmaskTAGBX   = 0x0000000001FFE000;
+const uint64_t tmaskTAGORB  = 0x01FFFFFFFE000000;
+const uint64_t tmaskMCELL   = 0x0E00000000000000;
+const uint64_t tmaskSL      = 0x3000000000000000;
+const uint64_t tmaskHEAD    = 0xC000000000000000;
+
+const uint64_t tfirstQUAL   = 0;
+const uint64_t tfirstBX     = 1;
+const uint64_t tfirstTAGBX  = 13;
+const uint64_t tfirstTAGORB = 25;
+const uint64_t tfirstMCELL  = 57;
+const uint64_t tfirstSL     = 60;
+const uint64_t tfirstHEAD   = 62;
+
+
 static int run = 1;
 
 /**
@@ -280,26 +314,60 @@ int main(int argc, char* argv[]) {
       /* unpack data on-the-fly */
       while(ith_word++ < buffer_words-1) {
 
-        uint32_t TDC_MEAS                =      (uint32_t)(((uint64_t *)buffer)[ith_word] >> 0  ) & 0x1F;
-        uint32_t BX_COUNTER              =      (uint32_t)(((uint64_t *)buffer)[ith_word] >> 5  ) & 0xFFF;
-        uint32_t ORBIT_CNT               =      (uint32_t)(((uint64_t *)buffer)[ith_word] >> 17 ) & 0xFFFFFFFF;
-        uint32_t TDC_CHANNEL             =  1 + (uint32_t)(((uint64_t *)buffer)[ith_word] >> 49 ) & 0x1FF;   // channel 0 -> 1
-        uint32_t FPGA                    =      (uint32_t)(((uint64_t *)buffer)[ith_word] >> 58 ) & 0xF  ;
-        uint32_t HEAD                    =      (uint32_t)(((uint64_t *)buffer)[ith_word] >> 62 ) & 0x3  ;
+        uint64_t tempHitCode = ((uint64_t *)buffer)[ith_word];
+        uint32_t headHitCode = (uint32_t)(tempHitCode >> hfirstHEAD) & hmaskHEAD;
 
-        if (TDC_CHANNEL!=137 && TDC_CHANNEL!=138) {
-          TDC_MEAS -= 1;
+        // Hits
+        if ( headHitCode <= 2 ) {
+
+          uint32_t TDC_MEAS                =      (uint32_t)( tempHitCode >> hfirstTDC_MEAS    ) & hmaskTDC_MEAS;
+          uint32_t BX_COUNTER              =      (uint32_t)( tempHitCode >> hfirstBX_COUNTER  ) & hmaskBX_COUNTER;
+          uint32_t ORBIT_CNT               =      (uint32_t)( tempHitCode >> hfirstORBIT_CNT   ) & hmaskORBIT_CNT;
+          uint32_t TDC_CHANNEL             =  1 + (uint32_t)( tempHitCode >> hfirstTDC_CHANNEL ) & hmaskTDC_CHANNEL;   // channel 0 -> 1
+          uint32_t FPGA                    =      (uint32_t)( tempHitCode >> hfirstFPGA        ) & hmaskFPGA;
+          uint32_t HEAD                    =      (uint32_t)( tempHitCode >> hfirstHEAD        ) & hmaskHEAD;
+
+          if (TDC_CHANNEL!=137 && TDC_CHANNEL!=138) {
+            TDC_MEAS -= 1;
+          }
+
+          if(fileunpack_fd!=NULL && !no_write){
+            char wordbuffer[100];
+            size_t len = sprintf(wordbuffer,"%"PRIu32",%"PRIu32",%"PRIu32",%"PRIu32",%"PRIu32",%"PRIu32"\n",HEAD,FPGA,TDC_CHANNEL,ORBIT_CNT,BX_COUNTER,TDC_MEAS);
+            fwrite(wordbuffer, 1, len, fileunpack_fd);
+          }
+
+          if(verbosity>0) {
+              printf("%2d | %2d | %4d | %11"PRIu32" | %5d | %3d\n", HEAD, FPGA, TDC_CHANNEL, ORBIT_CNT, BX_COUNTER, TDC_MEAS);  
+          }
         }
+        // Trigger
+        else if ( headHitCode == 3 ) {
+                
+          uint64_t storedTrigHead     = ( tempHitCode & tmaskHEAD )   >> tfirstHEAD;
+          uint64_t storedTrigMiniCh   = ( tempHitCode & tmaskSL )     >> tfirstSL;
+          uint64_t storedTrigMCell    = ( tempHitCode & tmaskMCELL )  >> tfirstMCELL;
+          uint64_t storedTrigTagOrbit = ( tempHitCode & tmaskTAGORB ) >> tfirstTAGORB;
+          uint64_t storedTrigTagBX    = ( tempHitCode & tmaskTAGBX )  >> tfirstTAGBX;
+          uint64_t storedTrigBX       = ( tempHitCode & tmaskBX )     >> tfirstBX;
+          uint64_t storedTrigQual     = ( tempHitCode & tmaskQUAL )   >> tfirstQUAL;
 
-        if(fileunpack_fd!=NULL && !no_write){
-          char wordbuffer[100];
-          size_t len = sprintf(wordbuffer,"%"PRIu32",%"PRIu32",%"PRIu32",%"PRIu32",%"PRIu32",%"PRIu32"\n",HEAD,FPGA,TDC_CHANNEL,ORBIT_CNT,BX_COUNTER,TDC_MEAS);
-          fwrite(wordbuffer, 1, len, fileunpack_fd);
+          // Null trigger
+          if (storedTrigBX == 4095) {
+          }
+
+          if(fileunpack_fd!=NULL && !no_write){
+            char wordbuffer[100];
+            size_t len = sprintf(wordbuffer,"%"PRIu64",%"PRIu64",%"PRIu64",%"PRIu64",%"PRIu64",%"PRIu64",%"PRIu64"\n", storedTrigHead, storedTrigMiniCh, storedTrigMCell, storedTrigTagOrbit, storedTrigTagBX, storedTrigBX, storedTrigQual);
+            fwrite(wordbuffer, 1, len, fileunpack_fd);
+          }
+
+          if(verbosity>0) {
+              printf("%"PRIu64" | %"PRIu64" | %"PRIu64" | %11"PRIu64" | %"PRIu64" | %"PRIu64" | %"PRIu64" | %"PRIu64"\n", storedTrigHead, storedTrigMiniCh, storedTrigMCell, storedTrigTagOrbit, storedTrigTagBX, storedTrigBX, storedTrigQual);  
+          }
+
         }
-
-        if(verbosity>0) {
-            printf("%2d | %2d | %4d | %11"PRIu32" | %5d | %3d\n", HEAD, FPGA, TDC_CHANNEL, ORBIT_CNT, BX_COUNTER, TDC_MEAS);  
-        } 
+        //
       }
     }
   }
