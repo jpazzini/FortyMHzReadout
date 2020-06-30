@@ -1,3 +1,4 @@
+#!/bin/env python
 import time
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
@@ -105,7 +106,7 @@ if __name__ == '__main__':
 
     datafolder = datafolder + thisrun + '/'
 
-    p = subprocess.Popen(['sudo', './streamed_daq.out', '-c -1', '-u', '%s%s' % (ramdisk, 'data'), '-f', '%s%s' % (ramdisk, 'data')])
+    p = subprocess.Popen(['sudo', './run_DMA', '-c -1', '-u', '%s%s' % (ramdisk, 'data'), '-f', '%s%s' % (ramdisk, 'data')])
 
     w = Watcher(ramdisk)
     w.run()

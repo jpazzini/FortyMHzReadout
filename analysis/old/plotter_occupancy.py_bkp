@@ -1,0 +1,126 @@
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
+import time
+import json
+from threading import Thread
+from kafka import KafkaConsumer
+import numpy as np
+from bokeh.io import curdoc, reset_output
+from bokeh.layouts import row, gridplot
+from bokeh.client import push_session
+from bokeh.document import Document
+from bokeh.models import ColumnDataSource
+from bokeh.plotting import figure
+
+###
+READ_TIME = 0.700 #sec.
+N_CHANNELS = 64
+N_SL = 2
+
+# channel-layer map
+def map(chan):
+  mod = chan%4
+  if mod == 1:
+    return chan, 1
+  elif mod == 2:
+    return chan-1., 3
+  elif mod == 3:
+    return chan-0., 2
+  else:
+    return chan-1., 4
+
+CHANNELS = [map(c)[0] for c in range(1, N_CHANNELS+1)]
+LAYERS   = [map(c)[1] for c in range(1, N_CHANNELS+1)]
+
+class Test(Thread):
+    def __init__(self, data1, data2, consumer):
+        super(Test, self).__init__()
+        self.data1 = data1
+        self.data2 = data2
+        self.cds1 = ColumnDataSource(data=data1)
+        self.cds2 = ColumnDataSource(data=data2)
+        self.p_chan = figure(plot_width=600,
+                  plot_height=400,
+                  title="Hits rate per channel",
+                  x_axis_label="Channel",
+                  y_axis_label="Rate [Hz]")
+        self.p_chan.vbar(x='thex',
+              top='they',
+              width=0.9,
+              bottom=0,
+              source=self.cds1)
+        self.p_occ_0 = figure(
+            plot_width=600,
+            plot_height=400,
+            y_range=[4.5,0.5],
+            x_range=[-1,N_CHANNELS+1],
+            title="Occupancy - SL 1",
+            y_axis_label="Layer",
+            x_axis_label="Channel")
+        self.p_occ_0.scatter(
+            x='occchan',
+            y='occlay',
+            fill_color='somecolors_0',
+            marker='square',
+            size=12,
+            line_color='black',
+            source=self.cds2)
+        self.p_occ_1 = figure(
+            plot_width=600,
+            plot_height=400,
+            y_range=[4.5,0.5],
+            x_range=[-1,N_CHANNELS+1],
+            title="Occupancy - SL 2",
+            y_axis_label="Layer",
+            x_axis_label="Channel")
+        self.p_occ_1.scatter(
+            x='occchan',
+            y='occlay',
+            fill_color='somecolors_1',
+            marker='square',
+            size=12,
+            line_color='black',
+            source=self.cds2)
+        self.consumer = consumer
+    def run(self):
+        for message in self.consumer:
+            self.data1['thex'] = message.value['TDC_CHANNEL']
+            self.data1['they'] = [x/READ_TIME for x in message.value['COUNT']]
+            self.cds1.data.update(**self.data1)
+            zipped = dict(zip(message.value['TDC_CHANNEL'], message.value['COUNT']))#.sort(key = lambda t: t[0])
+            self.data2['occchan'] = CHANNELS
+            self.data2['occlay'] = LAYERS
+            for theSL in range(N_SL):
+                self.data2['somecolors_%d' % theSL] = []
+                thedict = {k: zipped[k] for k in zipped.keys() if k in range(N_CHANNELS*theSL+1, N_CHANNELS*(theSL+1)+1)}
+                maxcount = float(max(thedict.values())) if len(thedict)>0 else 0
+                for c in range(1, N_CHANNELS+1):
+                    cur_c = c+(N_CHANNELS*theSL)
+                    cval = 0.
+                    if cur_c in zipped:
+                        cval = zipped[cur_c]/maxcount if maxcount>0 else zipped[cur_c]
+                    self.data2['somecolors_%d'%theSL].append("#%02x%02x%02x" % (int(255*(1-cval)), int(255*(1-cval)), int(255*(1-cval))) if cval>0 else '#ffffff')
+            self.cds2.data.update(**self.data2)
+
+data1 = dict(thex=[], they=[])
+data2 = dict(occchan=[], occlay=[], somecolors_0=[], somecolors_1=[])
+
+consumer = KafkaConsumer(bootstrap_servers='10.64.22.40:9092,10.64.22.41:9092,10.64.22.42:9092',
+                       auto_offset_reset='latest',
+                       enable_auto_commit=False,
+                       value_deserializer=lambda m: json.loads(m.decode('ascii')))
+
+consumer.subscribe(['plot'])
+
+test = Test(data1=data1, data2=data2, consumer=consumer)
+
+doc = Document()
+doc.add_root(gridplot([[test.p_chan, None],[test.p_occ_0, test.p_occ_1]]))
+session = push_session(document=doc)
+session.show()
+
+test.start()
+session.loop_until_closed()
+
+
+
