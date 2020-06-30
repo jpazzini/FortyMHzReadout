@@ -36,6 +36,50 @@
 #define VERBOSITY_DEFAULT (0)
 #define KAFKA_BROKER_DEFAULT "dummy_broker"
 #define KAFKA_TOPIC_DEFAULT "dummy_topic"
+#define RUN_NUMBER_DEFAULT (999999)
+
+
+// Hit masks
+const uint64_t hmaskTDC_MEAS      = 0x1F;
+const uint64_t hmaskBX_COUNTER    = 0xFFF;
+const uint64_t hmaskORBIT_CNT     = 0xFFFFFFFF;
+const uint64_t hmaskTDC_CHANNEL   = 0x1FF;
+const uint64_t hmaskFPGA          = 0xF;
+const uint64_t hmaskHEAD          = 0x3;
+
+const uint64_t hfirstTDC_MEAS     = 0;
+const uint64_t hfirstBX_COUNTER   = 5;
+const uint64_t hfirstORBIT_CNT    = 17;
+const uint64_t hfirstTDC_CHANNEL  = 49;
+const uint64_t hfirstFPGA         = 58;
+const uint64_t hfirstHEAD         = 62;
+
+// Trigger masks
+const uint64_t tmaskQUAL    = 0x0000000000000001;
+const uint64_t tmaskBX      = 0x0000000000001FFE;
+const uint64_t tmaskTAGBX   = 0x0000000001FFE000;
+const uint64_t tmaskTAGORB  = 0x01FFFFFFFE000000;
+const uint64_t tmaskMCELL   = 0x0E00000000000000;
+const uint64_t tmaskSL      = 0x3000000000000000;
+const uint64_t tmaskHEAD    = 0xC000000000000000;
+
+const uint64_t tfirstQUAL   = 0;
+const uint64_t tfirstBX     = 1;
+const uint64_t tfirstTAGBX  = 13;
+const uint64_t tfirstTAGORB = 25;
+const uint64_t tfirstMCELL  = 57;
+const uint64_t tfirstSL     = 60;
+const uint64_t tfirstHEAD   = 62;
+
+// Runumber masks
+const uint64_t rmaskRUNN    = 0xFFFFFFFF;
+const uint64_t rmaskCTRL    = 0x3FFFFFFF;
+const uint64_t rmaskHEAD    = 0x3;
+
+const uint64_t rfirstRUNN   = 0;
+const uint64_t rfirstCTRL   = 32;
+const uint64_t rfirstHEAD   = 62;
+
 
 static int run = 1;
 
@@ -78,6 +122,7 @@ static struct option const long_opts[] = {
   {"verbose",       required_argument,  NULL, 'v'},
   {"broker",        required_argument,  NULL, 'b'},
   {"topic",         required_argument,  NULL, 't'},
+  {"runnumber",     required_argument,  NULL, 'r'},
   {"help",          no_argument,        NULL, 'h'},
   {0,               0,                  0,    0  }
 };
@@ -94,6 +139,7 @@ static void usage(const char* name) {
   printf("  -%c (--%s) be more verbose during test\n",                          long_opts[i].val, long_opts[i].name, VERBOSITY_DEFAULT           ); i++;
   printf("  -%c (--%s) kafka broker\n",                                         long_opts[i].val, long_opts[i].name, KAFKA_BROKER_DEFAULT        ); i++;
   printf("  -%c (--%s) kafka topic\n",                                          long_opts[i].val, long_opts[i].name, KAFKA_TOPIC_DEFAULT         ); i++;
+  printf("  -%c (--%s) run number\n",                                           long_opts[i].val, long_opts[i].name, RUN_NUMBER_DEFAULT          ); i++;
   printf("  -%c (--%s) print usage help and exit\n",                            long_opts[i].val, long_opts[i].name                              ); i++;
 }
 
@@ -118,13 +164,18 @@ int main(int argc, char* argv[]) {
   int verbosity         = VERBOSITY_DEFAULT;
   char *brokers         = KAFKA_BROKER_DEFAULT; 
   char *topic           = KAFKA_TOPIC_DEFAULT;  
+  uint32_t runnumber    = RUN_NUMBER_DEFAULT;
+
+  //----- TESTING --> WRITEOUT DATA TO FILE TO XCHECK WITH MATTEO
+  // FILE *fileraw_fd;
+  // fileraw_fd = fopen("testing_kafka_dump.dat" , "w" );
 
   rd_kafka_t *rk;           /* Producer instance handle */
   rd_kafka_topic_t *rkt;    /* Topic object */
   rd_kafka_conf_t *conf;    /* Temporary configuration object */
   char errstr[64];          /* librdkafka API error reporting buffer */
 
-  while ( (cmd_opt = getopt_long(argc, argv, "vhc:b:t:d:a:s:o:", long_opts, NULL) ) != -1) {
+  while ( (cmd_opt = getopt_long(argc, argv, "vhc:b:t:r:d:a:s:o:", long_opts, NULL) ) != -1) {
     switch (cmd_opt){
       case 0: /* long option */
         break;
@@ -151,6 +202,9 @@ int main(int argc, char* argv[]) {
         break;
       case 't': /* topic */
         topic = strdup(optarg);
+        break;
+      case 'r': /* runnumber */
+        runnumber = getopt_integer(optarg);
         break;
       case 'h': /* print usage help and exit */
       default:
@@ -271,24 +325,32 @@ int main(int argc, char* argv[]) {
       return 1;
   }
 
+
   int rc = -1;
   char *buffer = NULL;
   char *allocated = NULL;
-  uint64_t dummyword;
+  uint64_t runnumberword = runnumber;
   posix_memalign((void **)&allocated, 4096/*8*/, size+4096);
   assert(allocated && "ERROR! --- Pointer of memory allocated via posix_memalign is not valid\n");
   buffer = allocated + offset;
+  memset(buffer,0,size+sizeof(runnumberword)); // Allocate an empty buffer of size + 8B (for the runnumber word)
+  memcpy(buffer,&runnumberword,sizeof(runnumberword)); // Copy the runnumber into the first 8B of the buffer
   int fpga_fd = open(device, O_RDWR | O_NONBLOCK);
-  assert(fpga_fd >= 0 && "ERROR! --- Cannot connecto to the fpga\n");
+  assert(fpga_fd >= 0 && "ERROR! --- Cannot connect to the fpga\n");
+
 
   /* Signal handler for clean shutdown */     
   signal(SIGINT, stop);
 
   while (run && count--) {
 
-    memset(buffer, offset, size);
-    off_t off = lseek(fpga_fd, address, SEEK_SET); /* select AXI MM address */
-    rc = read(fpga_fd, buffer, size); /* read data from AXI MM into buffer using SGDMA */
+    //    memset(buffer+sizeof(runnumberword), offset, size);
+
+    /* select AXI MM address */
+    off_t off = lseek(fpga_fd, address, SEEK_SET); 
+    
+    /* read data from AXI MM into buffer using SGDMA */
+    rc = read(fpga_fd, buffer+sizeof(runnumberword), size); // Start filling the buffer from 8B onwards
 
     if (rc < 0) {
         printf("WARNING --- Error while reading a buffer from DMA\n");
@@ -305,14 +367,17 @@ int main(int argc, char* argv[]) {
         continue;
     }
 
+    //----- TESTING --> WRITEOUT DATA TO FILE TO XCHECK WITH MATTEO
+    // fwrite(buffer, size+sizeof(runnumberword), 1, fileraw_fd);
+
     if (rc>0) {
       retry:
         // Try producing the message to the topic
         if (rd_kafka_produce(rkt,                   // Topic object
                              RD_KAFKA_PARTITION_UA, // Use builtin partitioner to select partition
                              RD_KAFKA_MSG_F_COPY,   // Make a copy of the payload.
-                             buffer, // aword, //buffer,
-                             size, // aword_len,//size,                   // Message payload (value) and length
+                             buffer, 		    // Message payload (value)
+                             size+sizeof(runnumberword),	// Message length
                              NULL,
                              0,                     // Optional key and its length
                              NULL                   // Message opaque, provided in
@@ -345,24 +410,61 @@ int main(int argc, char* argv[]) {
 
       if(verbosity>0) {
 
-        int buffer_words = rc/sizeof(dummyword);
+        int buffer_words = rc/sizeof(runnumberword);
         int ith_word = -1;
 
         /* unpack data on-the-fly */
-        while(ith_word++ < buffer_words-1) {
+        while(ith_word++ < buffer_words) {
+        
+          uint64_t tempHitCode = ((uint64_t *)buffer)[ith_word];
+          uint32_t headHitCode = (uint32_t)(tempHitCode >> hfirstHEAD) & hmaskHEAD;
 
-          uint32_t TDC_MEAS                =      (uint32_t)(((uint64_t *)buffer)[ith_word] >> 0  ) & 0x1F;
-          uint32_t BX_COUNTER              =      (uint32_t)(((uint64_t *)buffer)[ith_word] >> 5  ) & 0xFFF;
-          uint32_t ORBIT_CNT               =      (uint32_t)(((uint64_t *)buffer)[ith_word] >> 17 ) & 0xFFFFFFFF;
-          uint32_t TDC_CHANNEL             =  1 + (uint32_t)(((uint64_t *)buffer)[ith_word] >> 49 ) & 0x1FF;   // channel 0 -> 1
-          uint32_t FPGA                    =      (uint32_t)(((uint64_t *)buffer)[ith_word] >> 58 ) & 0xF  ;
-          uint32_t HEAD                    =      (uint32_t)(((uint64_t *)buffer)[ith_word] >> 62 ) & 0x3  ;
+          // RunNumber
+	  if ( headHitCode == 0 ) {
 
-          if (TDC_CHANNEL!=137 && TDC_CHANNEL!=138) {
-            TDC_MEAS -= 1;
+            uint32_t rRUNN                    =      (uint32_t)( tempHitCode >> rfirstRUNN        ) & rmaskRUNN;
+            uint32_t rCTRL                    =      (uint32_t)( tempHitCode >> rfirstCTRL        ) & rmaskCTRL;
+            uint32_t rHEAD                    =      (uint32_t)( tempHitCode >> rfirstHEAD        ) & rmaskHEAD;
+
+            printf("%2d |            %6d |             %6d\n", rHEAD, rCTRL, rRUNN);
+
+	  }
+	  // Hits
+          else if ( headHitCode <= 2 ) {
+
+            uint32_t TDC_MEAS                =      (uint32_t)( tempHitCode >> hfirstTDC_MEAS    ) & hmaskTDC_MEAS;
+            uint32_t BX_COUNTER              =      (uint32_t)( tempHitCode >> hfirstBX_COUNTER  ) & hmaskBX_COUNTER;
+            uint32_t ORBIT_CNT               =      (uint32_t)( tempHitCode >> hfirstORBIT_CNT   ) & hmaskORBIT_CNT;
+            uint32_t TDC_CHANNEL             =  1 + (uint32_t)( tempHitCode >> hfirstTDC_CHANNEL ) & hmaskTDC_CHANNEL;   // channel 0 -> 1
+            uint32_t FPGA                    =      (uint32_t)( tempHitCode >> hfirstFPGA        ) & hmaskFPGA;
+            uint32_t HEAD                    =      (uint32_t)( tempHitCode >> hfirstHEAD        ) & hmaskHEAD;
+
+            if (TDC_CHANNEL!=137 && TDC_CHANNEL!=138) {
+              TDC_MEAS -= 1;
+            }
+
+            printf("%2d | %2d | %4d | %11"PRIu32" | %5d | %4d\n", HEAD, FPGA, TDC_CHANNEL, ORBIT_CNT, BX_COUNTER, TDC_MEAS);  
+            
           }
+          // Trigger
+          else if ( headHitCode == 3 ) {
+                  
+            uint64_t storedTrigHead     = (uint64_t)( tempHitCode & tmaskHEAD )   >> tfirstHEAD;
+            uint64_t storedTrigMiniCh   = (uint64_t)( tempHitCode & tmaskSL )     >> tfirstSL;
+            uint64_t storedTrigMCell    = (uint64_t)( tempHitCode & tmaskMCELL )  >> tfirstMCELL;
+            uint64_t storedTrigTagOrbit = (uint64_t)( tempHitCode & tmaskTAGORB ) >> tfirstTAGORB;
+            uint64_t storedTrigTagBX    = (uint64_t)( tempHitCode & tmaskTAGBX )  >> tfirstTAGBX;
+            uint64_t storedTrigBX       = (uint64_t)( tempHitCode & tmaskBX )     >> tfirstBX;
+            uint64_t storedTrigQual     = (uint64_t)( tempHitCode & tmaskQUAL )   >> tfirstQUAL;
 
-          printf("%2d | %2d | %4d | %11"PRIu32" | %5d | %3d\n", HEAD, FPGA, TDC_CHANNEL, ORBIT_CNT, BX_COUNTER, TDC_MEAS);  
+            // Null trigger
+            //if (storedTrigBX == 4095) {
+            //}
+
+            printf("%2"PRIu64" | %2"PRIu64" | %4"PRIu64" | %11"PRIu64" | %5"PRIu64" | %4"PRIu64" | %1"PRIu64"\n", storedTrigHead, storedTrigMiniCh, storedTrigMCell, storedTrigTagOrbit, storedTrigTagBX, storedTrigBX, storedTrigQual);  
+            
+
+          }
         }
       }
     }
@@ -381,6 +483,10 @@ int main(int argc, char* argv[]) {
 
   /* Destroy the producer instance */
   rd_kafka_destroy(rk);
+
+  //----- TESTING --> WRITEOUT DATA TO FILE TO XCHECK WITH MATTEO
+  // if (fileraw_fd != NULL)
+  //  fclose(fileraw_fd);
 
   return(0);
 
