@@ -4,13 +4,21 @@ from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 import os
 import sys
+import getopt, optparse
 import subprocess 
 import shutil
 
 datafolder = 'data/'
 ramdisk = '/mnt/rammo/'
 brokers = "10.64.22.40:9092,10.64.22.41:9092,10.64.22.42:9092"
-topic = "test80"
+topic = "topic_matteo"
+
+usage = "usage: %prog [options]"
+parser = optparse.OptionParser(usage)
+parser.add_option("-c", "--count", action="store", type="string", dest="count", default="-1")
+parser.add_option("-v", "--verbose", action="store_true", dest="verbose")
+(options, args) = parser.parse_args()
+
 
 class Animator:
 
@@ -90,23 +98,30 @@ if __name__ == '__main__':
 
     subfolders = [x for x in os.listdir(datafolder) if 'Run' in x]
     lastrun = -1 if subfolders == [] else int(max(subfolders).split('Run')[-1])
-    thisrun = '%s%06d' % ('Run', lastrun+1)
+    thisrun = lastrun+1
+    runfold = '%s%06d' % ('Run', thisrun)
 
-    if not os.path.exists(datafolder+thisrun):
-        os.makedirs(datafolder+thisrun)
-        print '--- Starting %s' % thisrun
+    if not os.path.exists(datafolder+runfold):
+        os.makedirs(datafolder+runfold)
+        print '--- Starting %s' % runfold
         print '    Stop run by [Ctrl+C]'
     else:
-        print 'WARNING! --- Run folder %s was already found into the folder' % thisrun
+        print 'WARNING! --- Run folder %s was already found into the folder' % runfold
         print '         --- This should not happen!'
         print '         --- To avoid overwriting isssues, run number has been changed to 999999!'
-        thisrun = '%s%06d' % ('Run', 999999)
-        os.makedirs(datafolder+thisrun)
+	thisrun = 999999
+	runfold = '%s%06d' % ('Run', thisrun)
+        os.makedirs(datafolder+runfold)
 
     c = cleaner()
     c.cleanup()
 
-    p = subprocess.Popen(['sudo', './run_DMA_kafka_fullDMA', '-c -1', '-b', '%s' % brokers, '-t', '%s' % topic])
+    p_list = ['sudo', './run_DMA_kafka_fullDMA', '-c %s' % options.count, '-b', '%s' % brokers, '-t', '%s' % topic, '-r %d' % thisrun]
+    
+    if options.verbose: 
+        p_list.append('-v')
+
+    p = subprocess.Popen(p_list)
 
     w = Watcher(ramdisk)
     w.run()
